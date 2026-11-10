@@ -15,7 +15,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR=/usr/local/lib/aarambh
 BIN_DIR=/usr/local/sbin
 COMMAND_DIR=/usr/local/bin
-LIB_FILES="common.sh cmdline.sh direct-boot.sh kernels-bls.sh kernels-scan.sh"
+LIB_FILES="common.sh cmdline.sh direct-boot.sh kernels-bls.sh kernels-scan.sh signing.sh"
 
 DRY_RUN=0
 SKIP_PLYMOUTH=0
@@ -48,7 +48,7 @@ if [ "$(id -u)" != 0 ] && [ "$DRY_RUN" = 0 ] && [ -z "${AARAMBH_ROOT:-}" ]; then
     exec sudo bash "${BASH_SOURCE[0]}" "$@"
 fi
 
-for library in common detect manifest triggers grub-config initramfs plymouth menu-entry; do
+for library in common detect manifest triggers grub-config initramfs plymouth menu-entry signing; do
     # shellcheck source=/dev/null
     . "$HOOK_DIR/lib/$library.sh"
 done
@@ -80,6 +80,35 @@ print_detection() {
     log "boot loader:     $BOOTLOADER${BLS:+ (BLS: $BLS)}"
     log "initramfs:       $INITRAMFS_TOOL"
     log "loader path:     $LOADER"
+    log "secure boot:     $(secure_boot_state)"
+}
+
+secure_boot_state() {
+    local state=off
+
+    if secure_boot_on; then
+        state=on
+    fi
+
+    case "$SIGN_MODE" in
+        mok) echo "$state, signed with $SIGN_DER, started by $SHIM_DIR/$SHIM_FILE" ;;
+        db) echo "$state, signed with the sbctl db key" ;;
+        *) echo "$state, not signed (no shim on the EFI partition)" ;;
+    esac
+}
+
+warn_unsigned() {
+    if [ "$SIGN_MODE" = none ] && secure_boot_on; then
+        warn "Secure Boot is on, but no shim was found on the EFI partition, so Aarambh"
+        warn "cannot be signed. Install your distribution's shim package (shim-signed on"
+        warn "Ubuntu and Debian, shim-x64 on Fedora, shim on openSUSE) and run setup.sh again."
+    fi
+}
+
+setup_signed_boot() {
+    write_signing_cert
+    sync_shim
+    install_signed_loader
 }
 
 write_environment() {
@@ -91,6 +120,7 @@ write_environment() {
         echo "BLS=$BLS"
         echo "GRUB_PROBE=$GRUB_PROBE"
         echo "GRUB_CFG=$GRUB_CFG"
+        signing_environment
     } | write_file "$ENV_FILE"
 
     manifest_add file "$ENV_FILE"
@@ -101,6 +131,7 @@ install_scripts() {
 
     install_file 755 "$HOOK_DIR/bin/aarambh-kernels" "$ROOT$BIN_DIR/aarambh-kernels"
     install_file 755 "$HOOK_DIR/bin/aarambh-clear" "$ROOT$BIN_DIR/aarambh-clear"
+    install_file 755 "$HOOK_DIR/bin/aarambh-sign" "$ROOT$BIN_DIR/aarambh-sign"
     install_file 755 "$HOOK_DIR/bin/aarambh" "$ROOT$COMMAND_DIR/aarambh"
     install_file 755 "$HOOK_DIR/bin/aarambh-debug" "$ROOT$COMMAND_DIR/aarambh-debug"
 
@@ -156,7 +187,9 @@ main() {
         die "could not find the EFI loader of $OS_NAME. Pass it with --loader '\\EFI\\<dir>\\<file>.efi'"
     fi
 
+    detect_signing || true
     print_detection
+    warn_unsigned
 
     if [ "$DRY_RUN" = 1 ]; then
         log "dry run: nothing will be changed"
@@ -166,6 +199,7 @@ main() {
     install_scripts
     install_triggers
     install_clear_service
+    setup_signed_boot
     reset_oneshot
     register_menu_entry "$LOADER"
     configure_grub
@@ -184,7 +218,9 @@ main() {
 
     regenerate_grub
     refresh_kernel_list
+    queue_enrollment
     print_summary
+    print_enrollment_steps
 }
 
 main

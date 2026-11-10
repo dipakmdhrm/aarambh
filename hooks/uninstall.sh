@@ -2,7 +2,8 @@
 #
 # Disconnect the running Linux installation from Aarambh and restore every
 # file setup.sh changed. With --purge it also removes Aarambh from the EFI
-# partition and deletes its firmware boot entry (do this on the last OS).
+# partition, deletes its firmware boot entry and its own Secure Boot key (do
+# this on the last OS).
 #
 # Usage: uninstall.sh [--dry-run] [--purge]
 
@@ -16,7 +17,7 @@ for argument in "$@"; do
     case "$argument" in
         --dry-run) DRY_RUN=1 ;;
         --purge) PURGE=1 ;;
-        *) sed -n '3,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
+        *) sed -n '3,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
     esac
 done
 
@@ -24,7 +25,7 @@ if [ "$(id -u)" != 0 ] && [ "$DRY_RUN" = 0 ] && [ -z "${AARAMBH_ROOT:-}" ]; then
     exec sudo bash "${BASH_SOURCE[0]}" "$@"
 fi
 
-for library in common detect manifest grub-config initramfs; do
+for library in common detect manifest grub-config initramfs signing; do
     # shellcheck source=/dev/null
     . "$HOOK_DIR/lib/$library.sh"
 done
@@ -124,6 +125,7 @@ regenerate_grub
 
 if [ "$PURGE" = 1 ]; then
     remove_boot_entry
+    forget_own_key
     run rm -rf "$ESP_DIR"
     log "Aarambh removed from the EFI partition"
 fi

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Collect everything needed to understand an Aarambh problem into one report:
-# platform, Secure Boot, firmware boot entries, files on the EFI partition,
+# platform, Secure Boot and signing, firmware boot entries, files on the EFI partition,
 # the installed commands, kernel lists, GRUB, initramfs, Plymouth, graphics
 # and the logs of this boot and the previous one.
 #
@@ -119,7 +119,7 @@ check_platform() {
     fi
 
     if [ "$secure_boot" = 1 ]; then
-        problem "Secure Boot is ON; the firmware refuses unsigned Aarambh and direct kernel boot"
+        note "Secure Boot is on"
     else
         good "Secure Boot is off"
     fi
@@ -296,6 +296,86 @@ check_esp() {
     fi
 
     check_direct_boot_copy
+}
+
+check_signature() {
+    if [ ! -f "$1" ]; then
+        return
+    fi
+
+    show "sbverify --list '$1'"
+    if sbverify --cert "$SIGN_CERT" "$1" >/dev/null 2>&1; then
+        good "$2 is signed with this OS's key"
+    else
+        problem "$2 is not signed with this OS's key: run 'sudo bash $ESP_DIR/hooks/setup.sh'"
+    fi
+}
+
+check_enrollment() {
+    local state
+
+    state=$(mokutil --test-key "$SIGN_DER" 2>&1)
+    echo "$state" >> "$BODY"
+
+    case "$state" in
+        *"already enrolled"*) good "the signing key is enrolled in MOK" ;;
+        *"enrollment request"*) note "the signing key waits for enrollment: restart, choose Enroll MOK and type the password from 'sudo aarambh-sign --password'" ;;
+        *) problem "the signing key is not enrolled, shim refuses Aarambh with Secure Boot on: run 'sudo aarambh-sign' and restart" ;;
+    esac
+}
+
+check_secure_boot() {
+    local mode="${SIGN_MODE:-none}"
+    local secure_boot
+
+    progress "Secure Boot"
+    section "Secure Boot"
+    secure_boot=$(od -An -t u1 -j4 -N1 "$SECURE_BOOT_VAR" 2>/dev/null | tr -d ' ')
+    echo "signing mode: $mode" >> "$BODY"
+
+    if has_command mokutil; then
+        show "mokutil --list-enrolled --short"
+        show "mokutil --list-new"
+    fi
+
+    if [ "$mode" = none ]; then
+        if [ "$secure_boot" = 1 ]; then
+            problem "Secure Boot is on but Aarambh is not signed: install your distribution's shim package (shim-signed, shim-x64, shim) and run setup.sh again"
+        fi
+        return
+    fi
+
+    if ! has_command sbverify; then
+        problem "sbverify is missing: install sbsigntool (Debian, Ubuntu) or sbsigntools"
+        return
+    fi
+
+    check_signature "$ESP_DIR/aarambh.efi" "aarambh.efi"
+    check_signature "$ESP_DIR/linux/$KEY/vmlinuz" "the direct-boot kernel"
+
+    if [ "$mode" != mok ]; then
+        return
+    fi
+
+    show "ls -la '$ESP_DIR/$SHIM_FILE' '$ESP_DIR/$SHIM_MANAGER' '$ESP_DIR/$SHIM_SECOND'"
+
+    if cmp -s "$ESP_DIR/aarambh.efi" "$ESP_DIR/$SHIM_SECOND"; then
+        good "$SHIM_SECOND (started by shim) is the current Aarambh"
+    else
+        problem "$SHIM_SECOND differs from aarambh.efi: run 'sudo bash $ESP_DIR/hooks/setup.sh'"
+    fi
+
+    if [ ! -f "$ESP_DIR/$SHIM_FILE" ] || [ ! -f "$ESP_DIR/$SHIM_MANAGER" ]; then
+        problem "shim or MokManager is missing next to Aarambh: run 'sudo aarambh-sign'"
+    fi
+
+    if has_command efibootmgr && ! efibootmgr -v 2>/dev/null | grep ' Aarambh' | grep -qiF "$SHIM_FILE"; then
+        problem "the Aarambh boot entry does not start shim: run scripts/install.sh again"
+    fi
+
+    if has_command mokutil; then
+        check_enrollment
+    fi
 }
 
 check_boot_entries() {
@@ -545,6 +625,7 @@ write_report() {
 check_platform
 check_installation
 check_esp
+check_secure_boot
 check_boot_entries
 check_boot_path
 check_grub

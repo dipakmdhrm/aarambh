@@ -60,15 +60,12 @@ int fs_exists(const CHAR16 *path)
     return 1;
 }
 
-static EFI_FILE_HANDLE open_for_read(const char *name, UINTN *size)
+static EFI_FILE_HANDLE open_path(const CHAR16 *path, UINTN *size)
 {
-    CHAR16 path[FS_PATH_MAX];
     EFI_FILE_HANDLE file;
     EFI_FILE_INFO *info;
 
-    fs_make_path(path, FS_PATH_MAX, name);
-
-    if (root->Open(root, &file, path, EFI_FILE_MODE_READ, 0) != EFI_SUCCESS) {
+    if (root->Open(root, &file, (CHAR16 *)path, EFI_FILE_MODE_READ, 0) != EFI_SUCCESS) {
         return NULL;
     }
 
@@ -83,19 +80,45 @@ static EFI_FILE_HANDLE open_for_read(const char *name, UINTN *size)
     return file;
 }
 
-void *fs_read(const char *name, UINTN *size)
+static EFI_FILE_HANDLE open_for_read(const char *name, UINTN *size)
 {
-    EFI_FILE_HANDLE file;
-    UINTN file_size;
+    CHAR16 path[FS_PATH_MAX];
+
+    fs_make_path(path, FS_PATH_MAX, name);
+    return open_path(path, size);
+}
+
+static int read_chunks(EFI_FILE_HANDLE file, UINT8 *buffer, UINTN size)
+{
+    UINTN done = 0;
+
+    while (done < size) {
+        UINTN chunk = size - done;
+
+        if (chunk > READ_CHUNK_SIZE) {
+            chunk = READ_CHUNK_SIZE;
+        }
+
+        if (file->Read(file, &chunk, buffer + done) != EFI_SUCCESS || chunk == 0) {
+            return 0;
+        }
+
+        done += chunk;
+    }
+
+    return 1;
+}
+
+static void *read_whole(EFI_FILE_HANDLE file, UINTN file_size, UINTN *size)
+{
     UINT8 *buffer;
 
-    file = open_for_read(name, &file_size);
     if (file == NULL) {
         return NULL;
     }
 
     buffer = mem_alloc(file_size + 1);
-    if (buffer != NULL && file->Read(file, &file_size, buffer) != EFI_SUCCESS) {
+    if (buffer != NULL && !read_chunks(file, buffer, file_size)) {
         mem_free(buffer);
         buffer = NULL;
     }
@@ -112,6 +135,22 @@ void *fs_read(const char *name, UINTN *size)
     }
 
     return buffer;
+}
+
+void *fs_read(const char *name, UINTN *size)
+{
+    UINTN file_size = 0;
+    EFI_FILE_HANDLE file = open_for_read(name, &file_size);
+
+    return read_whole(file, file_size, size);
+}
+
+void *fs_read_path(const CHAR16 *path, UINTN *size)
+{
+    UINTN file_size = 0;
+    EFI_FILE_HANDLE file = open_path(path, &file_size);
+
+    return read_whole(file, file_size, size);
 }
 
 int fs_size(const char *name, UINTN *size)

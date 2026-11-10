@@ -28,6 +28,24 @@ install_triggers() {
     if [ -d "$ROOT/etc/kernel.d/post-install" ]; then
         install_file 755 "$trigger" "$ROOT/etc/kernel.d/post-install/99-aarambh"
     fi
+
+    install_shim_triggers
+}
+
+# Copy a shim update next to Aarambh right away; on other package managers
+# aarambh-sign does it at the next start.
+install_shim_triggers() {
+    if [ "$SIGN_MODE" != mok ]; then
+        return 0
+    fi
+
+    if [ -d "$ROOT/etc/apt/apt.conf.d" ]; then
+        install_file 644 "$HOOK_DIR/apt/99aarambh" "$ROOT/etc/apt/apt.conf.d/99aarambh"
+    fi
+
+    if has_command pacman; then
+        install_file 644 "$HOOK_DIR/pacman/aarambh-shim.hook" "$ROOT/etc/pacman.d/hooks/aarambh-shim.hook"
+    fi
 }
 
 install_clear_service() {

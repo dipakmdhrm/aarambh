@@ -19,7 +19,8 @@ FAILURES=0
 
 HOST_TOOLS="bash sh sed awk grep cat cp mv rm mkdir install stat cmp df sort cut tr head tail
             basename dirname realpath mktemp sync date touch tac ls id env find wc chmod ln
-            readlink printf true false rmdir"
+            readlink printf true false rmdir od sha256sum uname"
+SIGNING_TOOLS="openssl sbsign sbverify"
 
 trap 'rm -rf "$WORK"' EXIT
 
@@ -205,6 +206,105 @@ check_uninstall() {
     fi
 }
 
+# mokutil stub: no key is enrolled yet; every call is logged.
+mokutil_stub() {
+    cat > "$BIN_DIR/mokutil" <<'STUB'
+#!/bin/sh
+echo "mokutil $*" >> "$STUB_LOG"
+case "$1" in
+    --test-key) echo "$2 is not enrolled" ;;
+esac
+exit 0
+STUB
+    chmod +x "$BIN_DIR/mokutil"
+}
+
+expect_signed() {
+    local cert="$ROOT_DIR/var/lib/aarambh/keys/signing.crt"
+
+    if PATH="$BIN_DIR" sbverify --cert "$cert" "$1" >/dev/null 2>&1; then
+        pass "$2 is signed with the generated key"
+    else
+        fail "$2 is not signed with the generated key"
+    fi
+}
+
+expect_same() {
+    if cmp -s "$1" "$2"; then
+        pass "$3"
+    else
+        fail "$3"
+    fi
+}
+
+# Ubuntu with Secure Boot on and shim on the ESP, but no MOK key yet: a key
+# is generated, Aarambh and the kernel copy are signed, shim is copied next to
+# Aarambh and the key is queued for enrollment.
+scenario_ubuntu_secure_boot() {
+    local efi="$REPO/build/aarambh.efi"
+    local tool
+
+    for tool in $SIGNING_TOOLS; do
+        if ! command -v "$tool" >/dev/null; then
+            echo "  skipped: $tool is not installed (sbsigntool, openssl)"
+            return 0
+        fi
+    done
+
+    if [ ! -f "$efi" ]; then
+        echo "  skipped: build/aarambh.efi is missing (run make first)"
+        return 0
+    fi
+
+    new_root ubuntu-secure-boot
+    make_sandbox "$BIN_DIR" update-grub grub-probe update-initramfs systemctl
+    for tool in $SIGNING_TOOLS; do
+        ln -sf "$(command -v "$tool")" "$BIN_DIR/$tool"
+    done
+    mokutil_stub
+
+    os_release "Ubuntu" ubuntu debian
+    new_esp "$ROOT_DIR/boot/efi"
+    cp "$efi" "$ESP/EFI/aarambh/aarambh.efi"
+    mkdir -p "$ESP/EFI/ubuntu" "$ROOT_DIR/etc/initramfs-tools" "$ROOT_DIR/etc/apt/apt.conf.d"
+    echo shim > "$ESP/EFI/ubuntu/shimx64.efi"
+    echo mokmanager > "$ESP/EFI/ubuntu/mmx64.efi"
+    mkdir -p "$ROOT_DIR/sys/firmware/efi/efivars"
+    printf '\006\000\000\000\001' > "$ROOT_DIR/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+    printf 'GRUB_TIMEOUT=10\n' > "$ROOT_DIR/etc/default/grub"
+    printf 'MODULES=most\n' > "$ROOT_DIR/etc/initramfs-tools/initramfs.conf"
+    : > "$ROOT_DIR/etc/initramfs-tools/modules"
+    echo "BOOT_IMAGE=/boot/vmlinuz-6.8.0-45-generic root=UUID=1111-root ro quiet splash" \
+        > "$ROOT_DIR/proc/cmdline"
+    kernel_files initrd.img-6.8.0-45-generic
+    cp "$efi" "$ROOT_DIR/boot/vmlinuz-6.8.0-45-generic"
+
+    check_setup ubuntu --no-plymouth
+    expect_signed "$ESP/EFI/aarambh/aarambh.efi" "aarambh.efi"
+    expect_same "$ESP/EFI/aarambh/aarambh.efi" "$ESP/EFI/aarambh/grubx64.efi" \
+        "grubx64.efi is the signed Aarambh"
+    expect_same "$ESP/EFI/ubuntu/shimx64.efi" "$ESP/EFI/aarambh/shimx64.efi" "shim copied"
+    expect_same "$ESP/EFI/ubuntu/mmx64.efi" "$ESP/EFI/aarambh/mmx64.efi" "MokManager copied"
+    expect_signed "$ESP/EFI/aarambh/linux/ubuntu/vmlinuz" "the direct-boot kernel"
+
+    local password="$ROOT_DIR/var/lib/aarambh/keys/mok-password"
+
+    if grep -q 'Enroll MOK' "$WORK/setup.log" && grep -qE '^[0-9]{8}$' "$password" \
+        && grep -qF "password: $(cat "$password")" "$WORK/setup.log"; then
+        pass "enrollment steps shown with an 8-digit password"
+    else
+        fail "enrollment steps or the 8-digit password missing"
+    fi
+
+    if [ "$(stat -c %a "$password")" = 600 ]; then
+        pass "the password file is root-only"
+    else
+        fail "the password file is readable by others"
+    fi
+
+    check_uninstall ubuntu
+}
+
 scenario_ubuntu() {
     new_root ubuntu
     make_sandbox "$BIN_DIR" update-grub grub-probe update-initramfs systemctl plymouthd \
@@ -362,7 +462,7 @@ scenario_derivative() {
     check_uninstall tuxedo
 }
 
-ALL="ubuntu fedora arch_systemd_boot arch_grub opensuse void derivative"
+ALL="ubuntu ubuntu_secure_boot fedora arch_systemd_boot arch_grub opensuse void derivative"
 
 for SCENARIO in ${*:-$ALL}; do
     SCENARIO=${SCENARIO//-/_}

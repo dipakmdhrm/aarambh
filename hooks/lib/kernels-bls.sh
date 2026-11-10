@@ -166,7 +166,8 @@ list_bls_kernels() {
         # shellcheck disable=SC2086
         parts=$(esp_paths $initrds || true)
 
-        if esp_path "$kernel" >/dev/null && { [ -z "$initrds" ] || [ -n "$parts" ]; }; then
+        if esp_path "$kernel" >/dev/null && boots_in_place "$kernel" \
+            && { [ -z "$initrds" ] || [ -n "$parts" ]; }; then
             line="$line$(direct_fields "$(esp_path "$kernel")" "$parts" "$options")"
         elif [ "$first" = 1 ] && [ -n "$initrds" ] && [[ "$version" != *rescue* ]]; then
             # shellcheck disable=SC2086

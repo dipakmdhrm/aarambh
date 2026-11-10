@@ -1,7 +1,8 @@
 #!/bin/bash
 #
-# Build Aarambh, copy it to the EFI system partition, register a firmware boot
-# entry and connect the running OS through hooks/setup.sh.
+# Build Aarambh, copy it to the EFI system partition, connect the running OS
+# through hooks/setup.sh (which also signs Aarambh for Secure Boot) and
+# register a firmware boot entry: through shim when Aarambh is signed.
 #
 # Usage: scripts/install.sh [--dry-run] [--reset-config] [--theme <name>]
 #                           [--default <os>] [--list-themes] [setup.sh options]
@@ -169,7 +170,30 @@ copy_files() {
     copy_config
 }
 
+# Through shim when setup.sh signed Aarambh for it, else Aarambh itself.
+boot_loader_path() {
+    local mode=""
+    local file=""
+
+    if [ -f "$ENV_FILE" ]; then
+        mode=$(sed -n 's/^SIGN_MODE=//p' "$ENV_FILE")
+        file=$(sed -n 's/^SHIM_FILE=//p' "$ENV_FILE")
+    fi
+
+    if [ "$mode" = mok ] && [ -n "$file" ]; then
+        printf '\\EFI\\aarambh\\%s' "$file"
+    else
+        printf '%s' "$EFI_LOADER"
+    fi
+}
+
+aarambh_entry() {
+    sudo efibootmgr -v | grep -E "^Boot[0-9A-Fa-f]{4}\*? $BOOT_LABEL" | head -n1
+}
+
 register_boot_entry() {
+    local loader
+    local entry
     local source
     local disk
     local partition
@@ -178,15 +202,22 @@ register_boot_entry() {
         die "efibootmgr is not installed"
     fi
 
-    if sudo efibootmgr | grep -q " $BOOT_LABEL"; then
+    loader=$(boot_loader_path)
+    entry=$(aarambh_entry)
+
+    if [ -n "$entry" ] && grep -qiF "$loader" <<< "$entry"; then
         return 0
+    fi
+
+    if [ -n "$entry" ]; then
+        sudo_run efibootmgr -q -b "$(sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\).*/\1/p' <<< "$entry")" -B
     fi
 
     source=$(findmnt -no SOURCE "$ESP_ROOT")
     disk=/dev/$(lsblk -no PKNAME "$source")
     partition=$(cat "/sys/class/block/$(basename "$source")/partition")
 
-    sudo_run efibootmgr -q -c -d "$disk" -p "$partition" -L "$BOOT_LABEL" -l "$EFI_LOADER"
+    sudo_run efibootmgr -q -c -d "$disk" -p "$partition" -L "$BOOT_LABEL" -l "$loader"
 }
 
 parse_arguments "$@"
@@ -202,10 +233,10 @@ fi
 
 remove_legacy_files
 copy_files
-register_boot_entry
 
 if [ "$DRY_RUN" = 1 ]; then
     sudo bash "$REPO/hooks/setup.sh" "${SETUP_ARGS[@]}" || true
+    register_boot_entry
     if [ "${#SETTINGS_ARGS[@]}" -gt 0 ]; then
         echo "  would run: aarambh ${SETTINGS_ARGS[*]}"
     fi
@@ -213,6 +244,7 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 
 sudo bash "$TARGET/hooks/setup.sh" "${SETUP_ARGS[@]}"
+register_boot_entry
 
 if [ "${#SETTINGS_ARGS[@]}" -gt 0 ]; then
     sudo bash "$TARGET/hooks/bin/aarambh" "${SETTINGS_ARGS[@]}"

@@ -4,6 +4,7 @@ BUILD_DIR := build
 TARGET    := $(BUILD_DIR)/aarambh.efi
 STB_DIR   := third_party/stb
 STB_URL   := https://raw.githubusercontent.com/nothings/stb/master
+VERSION   := $(shell sed -n 's/^## \[\([0-9][^]]*\)\].*/\1/p' CHANGELOG.md | head -n1)
 
 NO_BUILD_GOALS := themes debug test uninstall clean
 
@@ -48,13 +49,14 @@ CFLAGS := $(INCLUDES) \
           -mno-red-zone -maccumulate-outgoing-args \
           -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
           -DGNU_EFI_USE_MS_ABI -DEFI_FUNCTION_WRAPPER \
+          -DAARAMBH_VERSION='"$(VERSION)"' \
           -MMD -MP \
           -Wall -Wextra -Wno-unused-parameter
 
 LDFLAGS := -nostdlib -znocombreloc -shared -Bsymbolic -T $(LDS) -L$(LIBDIR)
 
 EFI_SECTIONS := -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym \
-                -j .rel -j .rela -j .rel.* -j .rela.* -j .reloc
+                -j .rel -j .rela -j .rel.* -j .rela.* -j .reloc -j .sbat
 
 STB_HEADERS := $(STB_DIR)/stb_image.h $(STB_DIR)/stb_truetype.h
 
@@ -72,6 +74,8 @@ $(STB_DIR)/%.h:
 $(BUILD_DIR)/obj/%.o: %.c | $(STB_HEADERS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/obj/src/sbat.o: CHANGELOG.md
 
 $(BUILD_DIR)/aarambh.so: $(OBJECTS)
 	$(LD) $(LDFLAGS) $(CRT0) $(OBJECTS) -o $@ -lefi -lgnuefi
@@ -101,7 +105,8 @@ test:
 	./tests/hooks/run.sh
 
 qemu: $(TARGET)
-	./tests/qemu/run.sh $(if $(THEME),--theme $(THEME)) $(if $(DEFAULT),--default $(DEFAULT))
+	./tests/qemu/run.sh $(if $(THEME),--theme $(THEME)) $(if $(DEFAULT),--default $(DEFAULT)) \
+		$(if $(SECURE_BOOT),--secure-boot)
 
 clean:
 	rm -rf $(BUILD_DIR)

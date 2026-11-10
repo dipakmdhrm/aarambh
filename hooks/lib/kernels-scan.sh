@@ -238,7 +238,7 @@ list_scanned_kernels() {
             set -- $(microcode_images) "$initrd"
             parts=$(esp_paths "$kernel" "$@" || true)
 
-            if [ -n "$parts" ]; then
+            if [ -n "$parts" ] && boots_in_place "$kernel"; then
                 direct=$(esp_path "$kernel")
                 entry="$entry$(direct_fields "$direct" "${parts#*,}" "$cmdline")"
             elif [ "$first" = 1 ] && copy_for_direct_boot "$kernel" "$@"; then

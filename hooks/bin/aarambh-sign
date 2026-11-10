@@ -1,0 +1,39 @@
+#!/bin/bash
+#
+# Keep Aarambh's Secure Boot files current. Runs at every start and after
+# package updates: copies a newer shim and MokManager next to Aarambh, and
+# asks shim to enroll the signing key once Secure Boot has been turned on.
+# Never fails the boot or the package operation.
+#
+# Usage: aarambh-sign              (run by aarambh-clear.service and hooks)
+#        aarambh-sign --password   show the one-time MokManager password
+
+set -uo pipefail
+
+if [ "$(id -u)" != 0 ]; then
+    exec sudo "$0" "$@"
+fi
+
+LIB_DIR="${AARAMBH_LIB_DIR:-/usr/local/lib/aarambh}"
+
+# shellcheck source=../lib/common.sh
+. "$LIB_DIR/common.sh"
+# shellcheck source=../lib/signing.sh
+. "$LIB_DIR/signing.sh"
+
+if [ "${1:-}" = --password ]; then
+    if [ -s "$PASSWORD_FILE" ]; then
+        echo "MokManager password: $(mok_password)"
+    else
+        echo "No enrollment was requested on this system, so there is no password."
+    fi
+    exit 0
+fi
+
+if ! load_environment || [ ! -d "$ESP_DIR" ] || [ "$SIGN_MODE" = none ]; then
+    exit 0
+fi
+
+sync_shim
+queue_enrollment
+exit 0

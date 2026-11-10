@@ -11,7 +11,7 @@ are found automatically.
 
 > [!IMPORTANT]
 > **Supported hardware: 64-bit x86 PCs (`x86_64`, Intel or AMD) with 64-bit
-> UEFI firmware and Secure Boot turned off.**
+> UEFI firmware. Secure Boot can stay on.**
 >
 > Not supported: ARM (`aarch64`, Raspberry Pi, Apple Silicon, Snapdragon
 > laptops), 32-bit PCs (`i686`), 32-bit UEFI firmware (some Atom tablets),
@@ -168,9 +168,12 @@ so its OS-side parts (Plymouth theme, `aarambh` command, boot service) are
 updated too. Windows needs nothing. Kernel updates, theme and default changes
 never need this step.
 
-> **Secure Boot must be off.** Aarambh is not signed, so firmware with Secure
-> Boot enabled refuses to start it. See **Secure Boot** under *Safety and
-> recovery*.
+> **Secure Boot can stay on.** The installer signs Aarambh and starts it
+> through your distribution's shim. If your PC does not trust the signing key
+> yet, the installer prints an 8-digit password and a blue **Perform MOK
+> management** screen appears once at the next restart: choose **Enroll MOK →
+> Continue → Yes**, type the password, then **Reboot**. See **Secure Boot**
+> under *Safety and recovery*.
 
 **Something went wrong?** Start the system once it boots again (see *Safety
 and recovery*), then run `aarambh-debug`, or `make debug` from the source
@@ -342,7 +345,7 @@ work on your distribution, please open an issue with the report from
 | 64-bit CPU with 32-bit UEFI firmware           | Not supported |
 | RISC-V                                         | Not supported |
 | Legacy BIOS / CSM boot                         | Not supported |
-| Secure Boot on                                 | Not supported (turn it off) |
+| Secure Boot on                                 | Supported, through the distribution's shim (or sbctl keys) |
 
 `aarambh.efi` is built for `x86_64` UEFI only (`Makefile`: `ARCH := x86_64`),
 and the loaders it looks for (`shimx64.efi`, `grubx64.efi`,
@@ -412,6 +415,7 @@ Every step that needs root, and why:
 | Edit `/etc/default/grub`, regenerate `grub.cfg`| System boot loader configuration                 |
 | Install the Plymouth theme, rebuild initramfs  | System boot files                                |
 | Enable `aarambh-clear.service`, `aarambh-shutdown-splash.service` | System-wide systemd units          |
+| Sign Aarambh and kernels, ask shim to enroll the key (`mokutil`) | The signing key is root-only; enrollment writes firmware variables |
 
 `make` (the build) and `make test` never need root. Only `scripts/install.sh`,
 `hooks/setup.sh` and `hooks/uninstall.sh` use `sudo`.
@@ -448,10 +452,13 @@ Run once, from the OS you install from:
    `plymouth/` and `hooks/` into `\EFI\aarambh\`. An existing `aarambh.conf`
    is kept, because it holds the entries of your other systems; use
    `--reset-config` to replace it with the default.
-5. Creates a firmware boot entry named **Aarambh** with `efibootmgr`, only if
-   one does not exist yet. `efibootmgr` puts a new entry first in `BootOrder`.
-   Your existing boot entries stay.
-6. Runs `hooks/setup.sh` for the current OS.
+5. Runs `hooks/setup.sh` for the current OS, which also signs Aarambh for
+   Secure Boot (see **Secure Boot** under *Safety and recovery*).
+6. Creates a firmware boot entry named **Aarambh** with `efibootmgr`. It
+   starts shim when Aarambh is signed, `aarambh.efi` otherwise. An existing
+   entry with the same path is kept, one with another path is replaced.
+   `efibootmgr` puts a new entry first in `BootOrder`. Your existing boot
+   entries stay.
 
 7. With `--theme` or `--default`, sets them in `aarambh.conf` through the
    `aarambh` command.
@@ -485,6 +492,10 @@ Run once on **each** Linux installation that Aarambh boots.
 10. Rebuilds the initramfs (only when steps 8 or 9 changed something) and
     regenerates `grub.cfg`.
 11. Runs `aarambh-kernels` once and prints the kernel list.
+12. Secure Boot: picks the signing key, copies shim and MokManager next to
+    Aarambh, signs `aarambh.efi` and the direct-boot kernel and, with Secure
+    Boot on and an untrusted key, asks shim to enroll it and prints the
+    password.
 
 Every file it creates is listed in `/etc/aarambh/manifest`. Every system file
 it edits is first copied to `<file>.aarambh-backup`.
@@ -516,10 +527,14 @@ Options:
 | `/etc/kernel.d/post-install/99-aarambh`         | Void                          | After a kernel install                   | Refresh trigger |
 | `/usr/local/bin/aarambh`                        | every system                  | When you run it                          | Sets theme, default OS and timeout in `aarambh.conf` |
 | `/usr/local/bin/aarambh-debug`                  | every system                  | When you run it                          | Writes a debug report to your home folder, changes nothing |
-| `/usr/local/sbin/aarambh-clear`                 | systemd systems               | Called by the service below              | Empties `next-<os>.cfg` |
+| `/usr/local/sbin/aarambh-clear`                 | systemd systems               | Called by the service below              | Empties `next-<os>.cfg`, runs `aarambh-sign` |
+| `/usr/local/sbin/aarambh-sign`                  | every system                  | At every start, after apt and pacman updates, when you run it | Copies a newer shim next to Aarambh, asks shim to enroll the key once Secure Boot is on; `--password` shows the MokManager password |
+| `/etc/apt/apt.conf.d/99aarambh`                 | apt systems booting through shim | After every apt run                   | Runs `aarambh-sign` |
+| `/etc/pacman.d/hooks/aarambh-shim.hook`         | pacman systems booting through shim | After a shim package update        | Runs `aarambh-sign` |
+| `/var/lib/aarambh/keys/`                        | systems without a reusable key | Read when signing                       | Aarambh's own signing key and the MokManager password, root-only |
 | `/etc/systemd/system/aarambh-clear.service`     | systemd systems               | Once per boot                            | Makes a one-time kernel choice last for one boot only; copies the themed restart and shutdown frames into the Plymouth theme |
 | `/etc/systemd/system/aarambh-shutdown-splash.service` | systemd systems that return to the initramfs at shutdown (dracut, mkinitcpio) | At restart and shutdown | Gives the shutdown initramfs the current Aarambh splash, so Plymouth keeps the theme until power off |
-| `/etc/aarambh.env`                              | every system                  | Read by all scripts above                | Detected OS id, ESP, boot loader |
+| `/etc/aarambh.env`                              | every system                  | Read by all scripts above                | Detected OS id, ESP, boot loader, signing key and shim |
 | `/etc/aarambh/manifest`                         | every system                  | Read by `uninstall.sh`                   | List of everything to undo |
 
 The refresh trigger is `hooks/triggers/aarambh-refresh`. It ends with
@@ -621,13 +636,67 @@ already on the ESP or copies made by the hook while Linux was running.
 
 <br>
 
-Aarambh is not signed with a key your firmware trusts, so with Secure Boot on
-the firmware refuses to start it. Turn Secure Boot off in the firmware setup
-before installing.
+Aarambh works with Secure Boot on. Nothing has to be set up by hand:
 
-Direct boot also loads the kernel without shim. If you sign Aarambh yourself
-and keep Secure Boot on, the distribution kernel can still be rejected;
-Aarambh then shows **"Blocked by Secure Boot"** and stays on the menu.
+```
+Firmware (trusts Microsoft's keys)
+  → shimx64.efi          your distribution's shim, signed by Microsoft
+  → grubx64.efi          Aarambh, signed with your Machine Owner Key (MOK)
+  → menu
+  → Linux: the kernel is checked by shim, then started directly
+  → Windows: bootmgfw.efi, signed by Microsoft
+```
+
+**How it is set up.** `setup.sh` finds a shim on the EFI partition (this OS's
+first, then any other distribution's) and copies it, with MokManager, into
+`\EFI\aarambh\`. It signs `aarambh.efi` and saves it as the file shim starts
+(`grubx64.efi`, or `grub.efi` with openSUSE's shim). `install.sh` then points
+the **Aarambh** boot entry at that shim.
+
+**Which key.** A key your PC already trusts is reused, so most PCs need no
+extra step at all:
+
+| Key                                             | Comes from |
+|-------------------------------------------------|------------|
+| `/var/lib/shim-signed/mok/MOK.der`              | Ubuntu, Debian (made for DKMS drivers such as NVIDIA) |
+| `/etc/pki/akmods/certs/public_key.der`          | Fedora akmods |
+| `/var/lib/dkms/mok.pub`                         | DKMS 3 |
+| `/var/lib/aarambh/keys/aarambh.der`             | Made by Aarambh when none of the above exists |
+
+**The one-time step.** When the key is not trusted yet, `setup.sh` asks shim
+to enroll it and prints a random 8-digit password. At the next restart a blue
+**Perform MOK management** screen appears: **Enroll MOK → Continue → Yes**,
+type the password, **Reboot**. The password is only digits because MokManager
+reads every keyboard as a US layout, and the digit keys are in the same place
+on all layouts. It is kept root-only in `/var/lib/aarambh/keys/mok-password`;
+`sudo aarambh-sign --password` shows it again. If you miss the screen, nothing
+breaks: shim cannot start Aarambh, the firmware moves on to your OS's own boot
+entry, and the screen comes back at the next restart.
+
+**Kernels.** Aarambh asks shim to check every kernel and loader it starts, the
+same check GRUB uses. Distribution kernels pass, kernels signed with your MOK
+key pass, anything else is refused and Aarambh shows **"Blocked by Secure
+Boot"** and starts your OS's own boot loader instead. The kernel copy made for
+direct boot is signed with the OS's key, so every Linux on the disk boots
+directly, whichever distribution's shim started Aarambh. Kernel updates are
+signed automatically.
+
+**Turning Secure Boot on later.** Aarambh is signed even with Secure Boot off.
+If you turn it on and the key is not enrolled yet, the PC starts your OS's own
+boot loader once, `aarambh-sign` notices at that start and asks shim to enroll
+the key, and the blue screen appears at the following restart. Read the
+password with `sudo aarambh-sign --password` before you restart.
+
+**Shim updates.** `aarambh-sign` copies a newer shim and MokManager next to
+Aarambh after apt and pacman updates and at every start, so shim updates and
+SBAT revocations reach Aarambh's copy too.
+
+**sbctl.** Without shim, keys you enrolled with `sbctl` are used, and the
+firmware checks Aarambh and the kernels directly.
+
+**Removing the key.** `uninstall.sh --purge` asks shim to remove Aarambh's own
+key (never a DKMS, akmods or shim-signed key) at the next restart: **Delete MOK
+→ Continue → Yes**, with the password it prints.
 
 </details>
 
@@ -961,14 +1030,21 @@ make assets     # regenerate logos, backgrounds and Plymouth themes
 make clean
 ```
 
-- `make test` creates fake Ubuntu, Fedora, Arch (GRUB and systemd-boot),
-  openSUSE, Void and an unknown Ubuntu derivative in a temporary folder, with
+- `make test` creates fake Ubuntu (also with Secure Boot on), Fedora, Arch
+  (GRUB and systemd-boot), openSUSE, Void and an unknown Ubuntu derivative in
+  a temporary folder, with
   stub commands, and compares the results with `tests/hooks/expected/`.
   Nothing on your system is touched. `UPDATE=1 make test` rewrites the
   expected files after an intended change.
 - `make qemu` builds a throwaway ESP image in `build/qemu/` with Ubuntu and
   Fedora entries plus fake Debian and Windows loaders for autodetect. It never
   touches your real ESP. `tests/qemu/run.sh --no-kvm` works without KVM.
+- `make qemu SECURE_BOOT=1` (`tests/qemu/run.sh --secure-boot`) boots it like
+  a real PC with Secure Boot on: OVMF with Microsoft's keys, your installed
+  shim, and Aarambh signed with a throwaway key that is already in MOK. It
+  needs `sbsigntool`, `openssl` and `virt-fw-vars` (`python3-virt-firmware`,
+  or `pip install virt-firmware`). Pass `SHIM=<file>` and
+  `MOK_MANAGER=<file>` when they are not found on their own.
 
 </details>
 
@@ -1040,6 +1116,7 @@ It asks for your password, changes nothing, and saves
 | Checked                 | What it looks at |
 |-------------------------|------------------|
 | Platform                | CPU architecture, UEFI or BIOS, 32/64-bit firmware, Secure Boot |
+| Secure Boot             | Signing mode, signatures of `aarambh.efi` and the direct-boot kernel, the file shim starts, shim and MokManager next to Aarambh, whether the boot entry starts shim, whether the key is enrolled |
 | Installation            | `/etc/aarambh.env`, the `aarambh` command and whether it is in your `PATH`, sudo's `secure_path` |
 | EFI partition           | `\EFI\aarambh\` files, `aarambh.conf`, the kernel lists, free space, the menu entry for this OS |
 | Direct boot             | Whether the copied kernel still has its modules in `/lib/modules`, `root=` points at a real filesystem, the initrd is not empty |
@@ -1120,7 +1197,8 @@ checks:
 | `root=` points to a filesystem that does not exist | Write the full, correct command line to `/etc/aarambh/cmdline`, then `sudo /usr/local/sbin/aarambh-kernels` |
 | No Aarambh Plymouth theme inside the initramfs    | Rebuild it: `sudo update-initramfs -u` (Debian, Ubuntu), `sudo dracut -f` (Fedora, openSUSE) or `sudo mkinitcpio -P` (Arch). The direct-boot copy is refreshed automatically |
 | `MODULES=dep` and the root disk is not found      | Set `MODULES=most` in `/etc/initramfs-tools/initramfs.conf`, then `sudo update-initramfs -u` |
-| Secure Boot is ON                                 | Turn it off in the firmware setup |
+| Secure Boot is on but Aarambh is not signed       | Install your distribution's shim package (`shim-signed`, `shim-x64`, `shim`), then run `setup.sh` again |
+| The signing key is not enrolled                   | `sudo aarambh-sign`, then restart and enroll it in MokManager |
 
 To go back to the old boot completely, see **Uninstall** under *Safety and
 recovery*.
@@ -1233,6 +1311,92 @@ spare.
 
 **Fix:** pass a different loader with `--loader`, or edit the two `entry` lines
 in `aarambh.conf` by hand.
+
+</details>
+
+<details>
+<summary><b>Blue screen: <code>Verification failed: (0x1A) Security Violation</code></b></summary>
+
+<br>
+
+**Cause:** Secure Boot is on and shim does not trust the key Aarambh is
+signed with yet. Shim then opens MokManager.
+
+**Fix:** pick **Continue boot** (or wait); the firmware starts your OS's own
+boot entry. In the OS run:
+
+```sh
+sudo aarambh-sign             # asks shim to enroll the key
+sudo aarambh-sign --password  # the password MokManager will ask for
+```
+
+Restart and choose **Enroll MOK → Continue → Yes**, type the password,
+**Reboot**.
+
+</details>
+
+<details>
+<summary><b>The blue <i>Perform MOK management</i> screen comes back at every restart</b></summary>
+
+<br>
+
+**Cause:** the enrollment was not confirmed (the screen timed out, or
+**Continue boot** was picked), and with Secure Boot on Aarambh asks again at
+every start, because shim cannot start it without the key.
+
+**Fix:** at the next restart choose **Enroll MOK → Continue → Yes** and type
+the password from `sudo aarambh-sign --password`. If you would rather not use
+Secure Boot, turn it off in the firmware setup; Aarambh keeps working and
+stops asking.
+
+</details>
+
+<details>
+<summary><b>MokManager says the password is wrong</b></summary>
+
+<br>
+
+**Cause:** an old password, or the number keys on the numeric keypad with
+Num Lock off.
+
+**Fix:** read the current one with `sudo aarambh-sign --password` and type it
+with the number row above the letters. After three wrong tries MokManager
+restarts the PC; the request stays and the screen comes back.
+
+</details>
+
+<details>
+<summary><b>The menu says <i>Blocked by Secure Boot</i></b></summary>
+
+<br>
+
+**Cause:** shim refused the kernel or loader of that entry: it is signed with
+a key the PC does not trust, or not signed at all. Aarambh then starts the OS's
+own boot loader.
+
+**Fix:** run `setup.sh` once on that OS, so its kernel copy is signed with its
+key. For a custom kernel, sign it with your MOK key, or let `aarambh-kernels`
+copy and sign it.
+
+</details>
+
+<details>
+<summary><b><code>sbsigntools and mokutil could not be installed</code></b></summary>
+
+<br>
+
+**Cause:** `setup.sh` found shim and tried to install the signing tools with
+your package manager, which failed (no network, or a package name it does not
+know).
+
+**Fix:** install them yourself and run `setup.sh` again:
+
+| Distribution        | Command |
+|---------------------|---------|
+| Debian, Ubuntu      | `sudo apt install sbsigntool mokutil` |
+| Fedora              | `sudo dnf install sbsigntools mokutil` |
+| openSUSE            | `sudo zypper install sbsigntools mokutil` |
+| Arch                | `sudo pacman -S sbsigntools mokutil` |
 
 </details>
 

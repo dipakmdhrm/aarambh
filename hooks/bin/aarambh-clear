@@ -46,3 +46,7 @@ if [ -d "$THEME_DIR" ]; then
     sync_script
     sync_splash
 fi
+
+if [ -x /usr/local/sbin/aarambh-sign ]; then
+    /usr/local/sbin/aarambh-sign
+fi

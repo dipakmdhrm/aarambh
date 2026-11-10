@@ -1,4 +1,7 @@
 # Copy a kernel and its initramfs onto the ESP for direct boot. Sourced.
+#
+# With Secure Boot signing set up (signing.sh), the copy is signed with this
+# OS's key, so shim accepts it whichever distribution's shim starts Aarambh.
 
 ESP_SPACE_MARGIN=$((8 * 1024 * 1024))
 
@@ -33,6 +36,25 @@ merged_initrd() {
     echo "$output"
 }
 
+# The source kernel and the signing key; the copy is redone when either changes.
+kernel_stamp() {
+    printf '%s %s\n' "$(sha256sum < "$1" | cut -d' ' -f1)" "$(signing_id)"
+}
+
+copy_kernel() {
+    if signing_enabled; then
+        sign_file "$1" "$2"
+    else
+        cp "$1" "$2"
+    fi
+}
+
+# A kernel already on the ESP is started where it is, unless signing is set
+# up and it carries no signature at all (shim would refuse it).
+boots_in_place() {
+    ! signing_enabled || has_signature "$1"
+}
+
 # copy_for_direct_boot <kernel> <initrd> [<initrd>...]
 copy_for_direct_boot() {
     local kernel=$1
@@ -40,6 +62,7 @@ copy_for_direct_boot() {
     local initrd
     local needed
     local part
+    local stamp
 
     shift
 
@@ -53,7 +76,10 @@ copy_for_direct_boot() {
     scratch=$(mktemp -p "${TMPDIR:-/var/tmp}" aarambh-initrd.XXXXXX)
     initrd=$(merged_initrd "$scratch" "$@")
 
-    if cmp -s "$kernel" "$LINUX_DIR/vmlinuz" && cmp -s "$initrd" "$LINUX_DIR/initrd.img"; then
+    stamp=$(kernel_stamp "$kernel")
+
+    if [ -f "$LINUX_DIR/vmlinuz" ] && [ "$(cat "$LINUX_DIR/vmlinuz.stamp" 2>/dev/null)" = "$stamp" ] \
+        && cmp -s "$initrd" "$LINUX_DIR/initrd.img"; then
         rm -f "$scratch"
         return 0
     fi
@@ -70,15 +96,16 @@ copy_for_direct_boot() {
         return 1
     fi
 
-    if ! cp "$kernel" "$LINUX_DIR/vmlinuz.new" || ! cp "$initrd" "$LINUX_DIR/initrd.img.new"; then
+    if ! copy_kernel "$kernel" "$LINUX_DIR/vmlinuz.new" || ! cp "$initrd" "$LINUX_DIR/initrd.img.new"; then
         rm -f "$scratch"
-        disable_direct_boot "copying the kernel failed"
+        disable_direct_boot "copying or signing the kernel failed"
         return 1
     fi
 
     rm -f "$scratch"
     mv -f "$LINUX_DIR/vmlinuz.new" "$LINUX_DIR/vmlinuz"
     mv -f "$LINUX_DIR/initrd.img.new" "$LINUX_DIR/initrd.img"
+    echo "$stamp" > "$LINUX_DIR/vmlinuz.stamp"
     sync
 }
 

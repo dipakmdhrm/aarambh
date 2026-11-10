@@ -60,6 +60,14 @@ load_environment() {
     BLS="${BLS:-no}"
     GRUB_PROBE="${GRUB_PROBE:-}"
     GRUB_CFG="${GRUB_CFG:-/boot/grub/grub.cfg}"
+    SIGN_MODE="${SIGN_MODE:-none}"
+    SIGN_KEY="${SIGN_KEY:-}"
+    SIGN_CERT="${SIGN_CERT:-}"
+    SIGN_DER="${SIGN_DER:-}"
+    SHIM_DIR="${SHIM_DIR:-}"
+    SHIM_FILE="${SHIM_FILE:-}"
+    SHIM_MANAGER="${SHIM_MANAGER:-}"
+    SHIM_SECOND="${SHIM_SECOND:-}"
 }
 
 # Print an ESP-relative UEFI path (\vmlinuz-linux) for a file that lives on the

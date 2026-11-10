@@ -13,6 +13,8 @@ LIB_DIR="${AARAMBH_LIB_DIR:-/usr/local/lib/aarambh}"
 . "$LIB_DIR/cmdline.sh"
 # shellcheck source=../lib/direct-boot.sh
 . "$LIB_DIR/direct-boot.sh"
+# shellcheck source=../lib/signing.sh
+. "$LIB_DIR/signing.sh"
 
 if ! load_environment || [ ! -d "$ESP_DIR" ]; then
     exit 0

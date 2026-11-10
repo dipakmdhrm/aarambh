@@ -3,22 +3,37 @@
 
 #include "boot/image_loader.h"
 
+#include "boot/secure_boot.h"
+#include "efi/fs.h"
 #include "efi/system.h"
+#include "lib/memory.h"
 
 EFI_STATUS image_loader_load(const CHAR16 *path, EFI_HANDLE *child)
 {
     EFI_DEVICE_PATH *device_path;
     EFI_STATUS status;
+    void *buffer;
+    UINTN size;
 
     *child = NULL;
 
-    device_path = FileDevicePath(system_device_handle(), (CHAR16 *)path);
-    if (device_path == NULL) {
+    buffer = fs_read_path(path, &size);
+    if (buffer == NULL) {
         return EFI_NOT_FOUND;
     }
 
-    status = BS->LoadImage(FALSE, system_image_handle(), device_path, NULL, 0, child);
+    device_path = FileDevicePath(system_device_handle(), (CHAR16 *)path);
+    if (device_path == NULL) {
+        mem_free(buffer);
+        return EFI_NOT_FOUND;
+    }
+
+    secure_boot_override(buffer, size);
+    status = BS->LoadImage(FALSE, system_image_handle(), device_path, buffer, size, child);
+    secure_boot_restore();
+
     FreePool(device_path);
+    mem_free(buffer);
 
     return status;
 }

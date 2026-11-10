@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-10
+
+### Added
+
+- Secure Boot support. Aarambh now starts through the distribution's own
+  shim, which every PC trusts, and is signed with a Machine Owner Key (MOK).
+  Everything is set up by `scripts/install.sh` and `hooks/setup.sh`:
+  - An already enrolled key is reused (Ubuntu's shim-signed MOK, Fedora's
+    akmods key, the DKMS key), so most PCs with NVIDIA or other DKMS drivers
+    need no extra step. Otherwise a key is created in `/var/lib/aarambh/keys/`
+    and enrolled once in MokManager with a random 8-digit password
+    (`sudo aarambh-sign --password` shows it again).
+  - Aarambh asks shim to check every kernel and loader it starts, so kernels
+    signed by the distribution or by the MOK key boot directly, and anything
+    else is still refused.
+  - Kernels copied for direct boot are signed with the OS's key, so every
+    distribution on the disk boots directly, whichever shim starts Aarambh.
+  - Shim and MokManager are copied next to Aarambh and kept current by
+    `aarambh-sign` at every start and after apt and pacman updates.
+  - Without shim, keys enrolled with sbctl are used.
+- `.sbat` section in `aarambh.efi`, required by shim 15.3 and later.
+- `aarambh-debug` checks the signatures, the boot entry, shim and the key
+  enrollment.
+- `make qemu SECURE_BOOT=1` (`tests/qemu/run.sh --secure-boot`): boots with
+  Secure Boot on, Microsoft keys and a real shim.
+- `make test` scenario for Ubuntu with Secure Boot on.
+
+### Changed
+
+- The Aarambh firmware boot entry is created after `setup.sh` and points at
+  shim when Aarambh is signed; an existing entry with another path is
+  replaced.
+- Aarambh reads every image into memory before starting it.
+- `uninstall.sh --purge` also removes Aarambh's own key (never a DKMS,
+  akmods or shim-signed key) from the trusted keys.
+
 ## [0.1.2] - 2026-11-10
 
 ### Added
@@ -74,7 +110,8 @@ First public release.
 - QEMU test runner (`make qemu THEME=... DEFAULT=...`) and automated hook tests
   (`make test`).
 
-[Unreleased]: https://github.com/NarkAgni/aarambh/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/NarkAgni/aarambh/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/NarkAgni/aarambh/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/NarkAgni/aarambh/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/NarkAgni/aarambh/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/NarkAgni/aarambh/releases/tag/v0.1.0

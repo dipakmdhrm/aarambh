@@ -17,6 +17,7 @@ int fs_exists(const CHAR16 *path);
 typedef int (*FsDirectoryCallback)(const CHAR16 *name, int is_directory, void *context);
 
 void *fs_read(const char *name, UINTN *size);
+void *fs_read_path(const CHAR16 *path, UINTN *size);
 int fs_size(const char *name, UINTN *size);
 int fs_read_into(const char *name, UINT8 *buffer, UINTN size, FsProgressCallback progress);
 int fs_write(const char *name, const char *data);

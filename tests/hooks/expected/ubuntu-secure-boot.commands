@@ -1,0 +1,7 @@
+systemctl daemon-reload
+systemctl enable aarambh-clear.service aarambh-shutdown-splash.service
+update-initramfs -u
+update-grub 
+grub-probe --target=fs_uuid /
+mokutil --test-key <work>/ubuntu-secure-boot/root/var/lib/aarambh/keys/aarambh.der
+mokutil --import <work>/ubuntu-secure-boot/root/var/lib/aarambh/keys/aarambh.der --hash-file /dev/fd/63
